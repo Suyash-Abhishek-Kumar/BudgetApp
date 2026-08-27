@@ -1,56 +1,87 @@
-# Personal Budget Tracker - Milestone 1
+# BudgetApp
 
-SQLite schema + core Python data-access layer, matching
-`Budget_App_Project_Spec.docx`.
+BudgetApp is a local-first desktop personal budget tracker built with
+Python, CustomTkinter, and SQLite. It helps you record income and expenses,
+set category spending limits, monitor your month, and understand where your
+money is going without relying on a hosted budgeting service.
 
-## Structure
+## Features
 
-```
-budgetapp/
-  app/
-    schema.sql           7-table schema (Section 5 of the spec)
-    db.py                connection handling + init_db() / reset_db()
-    settings.py          dynamic key/value settings, with defaults
-    categories.py        CRUD for budget categories
-    transactions.py      CRUD + soft/hard-limit status logic (Section 6.1)
-    emergency_fund.py     balance, audit log, manual transfers (Section 6.4)
-    budget_logic.py       month-end rollover + EF split, dashboard
-                           summary, month-end spending projection
-  test_milestone1.py      end-to-end sanity script (run this first)
-  requirements.txt
-```
+- Dashboard with available-to-spend, income, spending, savings, and emergency-fund summaries
+- Category budgets with soft and hard limits, progress indicators, and overflow warnings
+- Add, review, approve, and manage income and expense transactions
+- Interactive spending charts, including category breakdowns and monthly trends
+- Month-end rollover with configurable savings and emergency-fund allocation
+- Emergency-fund balance and transfer history
+- Configurable application settings and light/dark appearance modes
+- Optional Gemini-powered AI Assistant that can answer questions using live budget data
 
-## Try it
+## Requirements
+
+- Python 3.10 or newer
+- Tk support for your Python installation
+- A macOS, Windows, or Linux desktop environment
+
+Install the project dependencies in a virtual environment:
 
 ```bash
-cd budgetapp
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
+
+## Run the application
+
+```bash
+python3 main.py
+```
+
+The application creates its SQLite database automatically. During local
+development it uses `budget.db` in the project directory. When packaged as
+the macOS application, it stores data in:
+
+```text
+~/Library/Application Support/BudgetApp/budget.db
+```
+
+To enable the AI Assistant, open **Settings**, choose **AI Assistant**, enter
+a Gemini API key, and select a model. The key is encrypted before it is
+stored locally. The assistant is optional; the rest of the budget tracker
+works without it.
+
+## Test the core logic
+
+```bash
 python3 test_milestone1.py
 ```
 
-This creates a throwaway `test_budget.db`, runs through every rule in
-the spec (soft/hard limits, overflow messaging, pending-approval
-exclusion, month-end rollover + emergency-fund split, the spending
-projection) and asserts the results, printing each step so you can
-see exactly what's happening.
+The end-to-end sanity script uses a throwaway `test_budget.db` and checks
+category limits, transaction approval, emergency-fund transfers, month-end
+rollover, savings allocation, projections, and dashboard summaries.
 
-## Using it in Python
+## Project layout
 
-```python
-from app.db import init_db
-from app import categories, transactions, budget_logic
-
-init_db()  # creates budget.db next to app/ on first run
-
-food_id = categories.create_category("Food", soft_limit=200, hard_limit=250)
-transactions.add_transaction(amount=45.50, type="expense", category_id=food_id,
-                              description="Groceries")
-
-print(transactions.category_status(food_id))
-print(budget_logic.dashboard_summary())
+```text
+app/
+  schema.sql             SQLite schema
+  db.py                  Database connections and initialization
+  categories.py          Category CRUD and limits
+  transactions.py        Income and expense transactions
+  budget_logic.py        Dashboard, rollover, savings, and projections
+  emergency_fund.py      Emergency-fund balance and transfer history
+  settings.py            Persistent application settings
+  ai_chat.py             Gemini chat integration and key encryption
+  ai_context.py          Budget context supplied to the assistant
+ui/
+  dashboard_screen.py    Dashboard and charts
+  add_transaction_screen.py
+  transaction_list_screen.py
+  settings_screen.py
+  chat_screen.py         AI Assistant interface
+main.py                  Desktop application entry point
+BudgetApp.spec           PyInstaller packaging configuration
 ```
 
-## What's next (Milestone 2)
-
-CustomTkinter shell: navigation, Add Transaction screen, Transaction
-List — calling only the functions in `app/`, never touching SQL
-directly, per the architecture in Section 4 of the spec.
+The application is single-user and local-first. SQLite files, virtual
+environments, caches, and packaged build output are excluded from Git by
+[`.gitignore`](.gitignore).
