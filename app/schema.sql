@@ -72,3 +72,14 @@ CREATE TABLE IF NOT EXISTS recurring_transactions (
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
 CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
+
+CREATE TABLE IF NOT EXISTS savings_goals (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL,
+    target_amount  REAL NOT NULL,
+    saved_amount   REAL NOT NULL DEFAULT 0,
+    target_date    TEXT, -- 'YYYY-MM-DD'
+    created_at     TEXT NOT NULL,
+    is_completed   INTEGER NOT NULL DEFAULT 0
+);
+

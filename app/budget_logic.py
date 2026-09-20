@@ -174,8 +174,14 @@ def month_end_projection(month: str = None, db_path=None) -> dict:
     cumulative = []
     running = 0.0
     for d in range(1, current_day + 1):
-        running += daily_totals.get(d, 0.0)
-        cumulative.append({"day": d, "cumulative_spent": running})
+        day_amt = daily_totals.get(d, 0.0)
+        running += day_amt
+        cumulative.append({
+            "day": d,
+            "date": f"{year:04d}-{mon:02d}-{d:02d}",
+            "daily_spent": day_amt,
+            "cumulative_spent": running,
+        })
 
     actual_total_so_far = running
     avg_daily_rate = actual_total_so_far / current_day if current_day > 0 else 0.0
@@ -183,7 +189,11 @@ def month_end_projection(month: str = None, db_path=None) -> dict:
     projection = []
     for d in range(current_day, days_in_month + 1):
         projected_value = actual_total_so_far + avg_daily_rate * (d - current_day)
-        projection.append({"day": d, "projected_cumulative": projected_value})
+        projection.append({
+            "day": d,
+            "date": f"{year:04d}-{mon:02d}-{d:02d}",
+            "projected_cumulative": projected_value,
+        })
 
     return {
         "month": month,
@@ -240,6 +250,18 @@ def dashboard_summary(month: str = None, db_path=None) -> dict:
     # Available to Spend: Cash inflows minus expenses minus manual EF transfers
     available_to_spend = general_income + category_inflows - category_expenses - ef_manual_net
 
+    # Check if this month is already closed in savings table
+    conn = get_connection(db_path)
+    try:
+        savings_row = conn.execute(
+            "SELECT rollover_amount, emergency_fund_delta FROM savings WHERE month = ?", (month,)
+        ).fetchone()
+        is_closed = savings_row is not None
+        month_rollover = savings_row["rollover_amount"] if is_closed else 0.0
+        month_ef_delta = savings_row["emergency_fund_delta"] if is_closed else 0.0
+    finally:
+        conn.close()
+
     pending = list_transactions(status="pending_approval", db_path=db_path)
 
     return {
@@ -252,7 +274,60 @@ def dashboard_summary(month: str = None, db_path=None) -> dict:
         "emergency_fund_balance": ef_balance(db_path),
         "pending_approvals": pending,
         "projection": month_end_projection(month, db_path),
+        "is_closed": is_closed,
+        "month_rollover": month_rollover,
+        "month_ef_delta": month_ef_delta,
     }
+
+
+def get_available_months(db_path=None) -> list[str]:
+    """Returns a sorted list (newest first) of all distinct 'YYYY-MM' months
+    present in transactions or closed in savings, always including the current month."""
+    from datetime import date
+    current_month = date.today().isoformat()[:7]
+    conn = get_connection(db_path)
+    try:
+        months_set = {current_month}
+        for r in conn.execute("SELECT DISTINCT SUBSTR(date, 1, 7) AS m FROM transactions WHERE date IS NOT NULL"):
+            if r["m"] and len(r["m"]) == 7:
+                months_set.add(r["m"])
+        for r in conn.execute("SELECT DISTINCT month AS m FROM savings WHERE month IS NOT NULL"):
+            if r["m"] and len(r["m"]) == 7:
+                months_set.add(r["m"])
+        return sorted(list(months_set), reverse=True)
+    finally:
+        conn.close()
+
+
+def get_closed_months_ledger(db_path=None) -> list[dict]:
+    """Returns historical archive records for all months closed out in the savings table."""
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT month, rollover_amount, emergency_fund_delta FROM savings ORDER BY month DESC"
+        ).fetchall()
+        ledger = []
+        for r in rows:
+            m = r["month"]
+            inc_row = conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE type = 'income' AND status = 'confirmed' AND date LIKE ?",
+                (f"{m}%",)
+            ).fetchone()
+            exp_row = conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE type = 'expense' AND status = 'confirmed' AND date LIKE ?",
+                (f"{m}%",)
+            ).fetchone()
+            ledger.append({
+                "month": m,
+                "total_income": inc_row["total"],
+                "total_spent": exp_row["total"],
+                "rollover_savings": r["rollover_amount"],
+                "rollover_ef": r["emergency_fund_delta"],
+                "total_saved": r["rollover_amount"] + r["emergency_fund_delta"],
+            })
+        return ledger
+    finally:
+        conn.close()
 
 
 def get_historical_trend(category_id: int = None, months_count: int = 6, db_path=None) -> list[dict]:

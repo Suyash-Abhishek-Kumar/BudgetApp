@@ -98,3 +98,87 @@ def list_categories(db_path=None) -> list[dict]:
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+def transfer_category_budget(
+    from_cat_id: int,
+    to_cat_id: int,
+    amount: float,
+    adjust_soft: bool = True,
+    db_path=None,
+) -> dict:
+    """
+    Transfers envelope budget between two categories by adjusting hard_limit
+    (and proportionally soft_limit).
+    """
+    amount = float(amount)
+    if amount <= 0:
+        raise ValueError("Transfer amount must be positive.")
+    if from_cat_id == to_cat_id:
+        raise ValueError("Source and destination categories must be different.")
+
+    conn = get_connection(db_path)
+    try:
+        from_cat = conn.execute("SELECT * FROM categories WHERE id = ?", (from_cat_id,)).fetchone()
+        to_cat = conn.execute("SELECT * FROM categories WHERE id = ?", (to_cat_id,)).fetchone()
+
+        if not from_cat:
+            raise ValueError(f"Source category id={from_cat_id} not found.")
+        if not to_cat:
+            raise ValueError(f"Destination category id={to_cat_id} not found.")
+
+        from_hard = float(from_cat["hard_limit"])
+        from_soft = float(from_cat["soft_limit"])
+        if from_hard < amount:
+            raise ValueError(
+                f"Insufficient limit in '{from_cat['name']}'. Hard limit is ₹{from_hard:.2f}, attempted transfer: ₹{amount:.2f}"
+            )
+
+        new_from_hard = round(from_hard - amount, 2)
+        if adjust_soft and from_hard > 0:
+            ratio = from_soft / from_hard
+            new_from_soft = round(new_from_hard * ratio, 2)
+        else:
+            new_from_soft = min(from_soft, new_from_hard)
+
+        to_hard = float(to_cat["hard_limit"])
+        to_soft = float(to_cat["soft_limit"])
+        new_to_hard = round(to_hard + amount, 2)
+        if adjust_soft and to_hard > 0:
+            ratio = to_soft / to_hard
+            new_to_soft = round(new_to_hard * ratio, 2)
+        else:
+            new_to_soft = to_soft
+
+        conn.execute(
+            "UPDATE categories SET soft_limit = ?, hard_limit = ? WHERE id = ?",
+            (new_from_soft, new_from_hard, from_cat_id),
+        )
+        conn.execute(
+            "UPDATE categories SET soft_limit = ?, hard_limit = ? WHERE id = ?",
+            (new_to_soft, new_to_hard, to_cat_id),
+        )
+        conn.commit()
+
+        return {
+            "from_cat": {
+                "id": from_cat_id,
+                "name": from_cat["name"],
+                "old_hard": from_hard,
+                "new_hard": new_from_hard,
+                "old_soft": from_soft,
+                "new_soft": new_from_soft,
+            },
+            "to_cat": {
+                "id": to_cat_id,
+                "name": to_cat["name"],
+                "old_hard": to_hard,
+                "new_hard": new_to_hard,
+                "old_soft": to_soft,
+                "new_soft": new_to_soft,
+            },
+            "amount": amount,
+        }
+    finally:
+        conn.close()
+

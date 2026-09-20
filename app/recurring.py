@@ -126,3 +126,107 @@ def get_rule(rule_id: int, db_path=None) -> dict | None:
         return dict(row) if row else None
     finally:
         conn.close()
+
+
+def compute_next_due_date(current_due_date_str: str, frequency: str, interval_days: int | None = None) -> str:
+    from datetime import date, timedelta
+    import calendar
+
+    dt = date.fromisoformat(current_due_date_str)
+    if frequency == "daily":
+        next_dt = dt + timedelta(days=1)
+    elif frequency == "monthly":
+        year = dt.year
+        month = dt.month + 1
+        if month > 12:
+            month = 1
+            year += 1
+        max_day = calendar.monthrange(year, month)[1]
+        day = min(dt.day, max_day)
+        next_dt = date(year, month, day)
+    elif frequency == "yearly":
+        year = dt.year + 1
+        max_day = calendar.monthrange(year, dt.month)[1]
+        day = min(dt.day, max_day)
+        next_dt = date(year, dt.month, day)
+    elif frequency == "custom":
+        days = interval_days if interval_days and interval_days > 0 else 7
+        next_dt = dt + timedelta(days=days)
+    else:
+        next_dt = dt + timedelta(days=30)
+
+    return next_dt.isoformat()
+
+
+def process_due_recurring_transactions(target_date: str = None, db_path=None) -> list[int]:
+    """
+    Checks all active recurring transaction rules whose next_due_date <= target_date.
+    Spawns a transaction with status='pending_approval' for each occurrence,
+    advancing next_due_date on the rule.
+    Returns the list of newly created transaction IDs.
+    """
+    from datetime import date
+    from .transactions import add_transaction
+
+    if target_date is None:
+        target_date = date.today().isoformat()
+
+    conn = get_connection(db_path)
+    try:
+        rules = conn.execute(
+            "SELECT * FROM recurring_transactions WHERE active = 1 AND next_due_date <= ?",
+            (target_date,)
+        ).fetchall()
+        rules = [dict(r) for r in rules]
+    finally:
+        conn.close()
+
+    created_txn_ids = []
+    for rule in rules:
+        cur_due = rule["next_due_date"]
+        max_cycles = 60
+        cycle = 0
+        while cur_due <= target_date and cycle < max_cycles:
+            cycle += 1
+            # Check if an instance already exists for this rule on this date
+            conn = get_connection(db_path)
+            try:
+                existing = conn.execute(
+                    "SELECT id FROM transactions WHERE recurring_id = ? AND date = ?",
+                    (rule["id"], cur_due)
+                ).fetchone()
+            finally:
+                conn.close()
+
+            if not existing:
+                desc = rule["description"] or f"Recurring {rule['type'].capitalize()}"
+                txn_id = add_transaction(
+                    amount=rule["amount"],
+                    type=rule["type"],
+                    category_id=rule["category_id"],
+                    description=desc,
+                    txn_date=cur_due,
+                    funding_source="regular",
+                    status="pending_approval",
+                    recurring_id=rule["id"],
+                    db_path=db_path,
+                )
+                created_txn_ids.append(txn_id)
+
+            next_due = compute_next_due_date(cur_due, rule["frequency"], rule.get("interval_days"))
+            if next_due <= cur_due:
+                break
+            cur_due = next_due
+
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "UPDATE recurring_transactions SET next_due_date = ? WHERE id = ?",
+                (cur_due, rule["id"])
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    return created_txn_ids
+

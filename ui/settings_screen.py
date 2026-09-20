@@ -17,12 +17,14 @@ from app import settings as settings_api
 from app import emergency_fund as ef_api
 from app import recurring as recurring_api
 from app import budget_logic
+from app import backup as backup_api
 from app.db import get_connection
 from app.ai_chat import (
     save_api_key, load_api_key, save_model, load_model,
-    has_api_key, AVAILABLE_MODELS, DEFAULT_MODEL
+    has_api_key, AVAILABLE_MODELS, DEFAULT_MODEL, fetch_available_models
 )
 from ui import theme
+from ui.calendar_picker import CalendarPicker
 
 
 
@@ -246,7 +248,7 @@ class RecurringRuleDialog(ctk.CTkToplevel):
         # 7. Next Due Date
         next_row()
         ctk.CTkLabel(self, text="Next Due Date", font=theme.FONT_BODY_BOLD).grid(row=row_idx, column=0, sticky="w", padx=20, pady=5)
-        self.due_entry = ctk.CTkEntry(self, textvariable=self.due_var, width=180)
+        self.due_entry = CalendarPicker(self, textvariable=self.due_var, entry_width=145)
         self.due_entry.grid(row=row_idx, column=1, sticky="w", padx=20, pady=5)
 
         # Set editing values
@@ -369,6 +371,7 @@ class RecurringRuleDialog(ctk.CTkToplevel):
                     next_due_date=due,
                     db_path=self.db_path
                 )
+            recurring_api.process_due_recurring_transactions(db_path=self.db_path)
             if self.on_success:
                 self.on_success()
             self.destroy()
@@ -377,9 +380,10 @@ class RecurringRuleDialog(ctk.CTkToplevel):
 
 
 class SettingsScreen(ctk.CTkFrame):
-    def __init__(self, master, db_path):
+    def __init__(self, master, db_path, on_view_archive=None):
         super().__init__(master, fg_color="transparent")
         self.db_path = db_path
+        self.on_view_archive = on_view_archive
         self._build()
         self.refresh()
 
@@ -395,12 +399,16 @@ class SettingsScreen(ctk.CTkFrame):
         self.tabview.add("Categories")
         self.tabview.add("Emergency Fund")
         self.tabview.add("Recurring Rules")
+        self.tabview.add("Archives")
+        self.tabview.add("Backups")
         self.tabview.add("App Settings")
         self.tabview.add("AI Assistant")
 
         self._build_categories_tab(self.tabview.tab("Categories"))
         self._build_ef_tab(self.tabview.tab("Emergency Fund"))
         self._build_recurring_tab(self.tabview.tab("Recurring Rules"))
+        self._build_archives_tab(self.tabview.tab("Archives"))
+        self._build_backups_tab(self.tabview.tab("Backups"))
         self._build_global_tab(self.tabview.tab("App Settings"))
         self._build_ai_tab(self.tabview.tab("AI Assistant"))
 
@@ -815,6 +823,8 @@ class SettingsScreen(ctk.CTkFrame):
         try:
             new_active = 0 if rule["active"] == 1 else 1
             recurring_api.update_rule(rule["id"], active=new_active, db_path=self.db_path)
+            if new_active == 1:
+                recurring_api.process_due_recurring_transactions(db_path=self.db_path)
             self.refresh()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to toggle rule: {e}")
@@ -827,7 +837,257 @@ class SettingsScreen(ctk.CTkFrame):
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to delete rule: {e}")
 
-    # ------------------------------------------------------------ Tab 4: App Settings
+    # ------------------------------------------------------------ Tab: Archives
+    def _build_archives_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+
+        hdr = ctk.CTkFrame(parent, fg_color="transparent")
+        hdr.grid(row=0, column=0, sticky="ew", pady=(5, 10))
+        ctk.CTkLabel(
+            hdr,
+            text="Historical ledgers and finalized values of all past closed months.",
+            font=theme.FONT_BODY,
+            text_color=theme.COLOR_MUTED
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            hdr,
+            text="🔄 Refresh",
+            width=90,
+            fg_color="transparent",
+            border_width=1,
+            border_color=theme.COLOR_CARD_BORDER,
+            command=self._refresh_archives
+        ).pack(side="right")
+
+        self.archives_list_frame = ctk.CTkScrollableFrame(
+            parent,
+            fg_color=theme.COLOR_CARD_BG,
+            border_color=theme.COLOR_CARD_BORDER,
+            border_width=1,
+            corner_radius=12
+        )
+        self.archives_list_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+
+    def _refresh_archives(self):
+        for w in self.archives_list_frame.winfo_children():
+            w.destroy()
+
+        from app import budget_logic
+        from app.settings import get_setting
+        currency = get_setting("currency_symbol", self.db_path) or "₹"
+        ledger = budget_logic.get_closed_months_ledger(self.db_path)
+
+        if not ledger:
+            empty_frame = ctk.CTkFrame(self.archives_list_frame, fg_color="transparent")
+            empty_frame.pack(pady=40)
+            ctk.CTkLabel(
+                empty_frame,
+                text="📁 No closed months recorded yet.",
+                font=theme.FONT_BODY_BOLD,
+                text_color=theme.COLOR_MUTED
+            ).pack()
+            ctk.CTkLabel(
+                empty_frame,
+                text="When a month concludes and rollover runs, its permanent snapshot will appear here.",
+                font=theme.FONT_SMALL,
+                text_color=theme.COLOR_MUTED
+            ).pack(pady=(4, 0))
+            return
+
+        for item in ledger:
+            m = item["month"]
+            try:
+                y_i, m_i = [int(p) for p in m.split("-")]
+                m_title = date(y_i, m_i, 1).strftime("%B %Y")
+            except Exception:
+                m_title = m
+
+            card = ctk.CTkFrame(
+                self.archives_list_frame,
+                fg_color=("gray95", "gray18"),
+                border_width=1,
+                border_color=theme.COLOR_CARD_BORDER,
+                corner_radius=8
+            )
+            card.pack(fill="x", padx=10, pady=5)
+
+            top_row = ctk.CTkFrame(card, fg_color="transparent")
+            top_row.pack(fill="x", padx=12, pady=(8, 4))
+
+            ctk.CTkLabel(top_row, text=f"📅 {m_title}", font=theme.FONT_BODY_BOLD).pack(side="left")
+
+            badge = ctk.CTkLabel(
+                top_row,
+                text="CLOSED & ARCHIVED",
+                font=("Helvetica", 10, "bold"),
+                fg_color="#10B981",
+                text_color="white",
+                corner_radius=6,
+                padx=8,
+                pady=2
+            )
+            badge.pack(side="left", padx=10)
+
+            if hasattr(self, "on_view_archive") and self.on_view_archive:
+                ctk.CTkButton(
+                    top_row,
+                    text="View in Dashboard ↗",
+                    font=theme.FONT_SMALL,
+                    width=135,
+                    height=26,
+                    fg_color=theme.COLOR_PRIMARY,
+                    hover_color=theme.COLOR_PRIMARY_HOVER,
+                    command=lambda target_m=m: self.on_view_archive(target_m)
+                ).pack(side="right")
+
+            # Subtle separator
+            ctk.CTkFrame(card, height=1, fg_color=theme.COLOR_CARD_BORDER).pack(fill="x", padx=12, pady=(2, 6))
+
+            metrics_row = ctk.CTkFrame(card, fg_color="transparent")
+            metrics_row.pack(fill="x", padx=12, pady=(0, 8))
+
+            metrics = [
+                ("Total Income", f"{currency}{item['total_income']:,.2f}", theme.COLOR_PRIMARY),
+                ("Total Spent", f"{currency}{item['total_spent']:,.2f}", theme.COLOR_DANGER),
+                ("Rolled to Savings", f"{currency}{item['rollover_savings']:,.2f}", theme.COLOR_SUCCESS),
+                ("Rolled to EF", f"{currency}{item['rollover_ef']:,.2f}", "#8E44AD"),
+                ("Total Net Saved", f"{currency}{item['total_saved']:,.2f}", "#059669"),
+            ]
+
+            for col_idx in range(len(metrics)):
+                metrics_row.columnconfigure(col_idx, weight=1)
+
+            for idx, (label, val_str, val_color) in enumerate(metrics):
+                box = ctk.CTkFrame(metrics_row, fg_color=("gray90", "gray22"), corner_radius=6)
+                box.grid(row=0, column=idx, padx=4, sticky="ew", pady=2)
+
+                ctk.CTkLabel(
+                    box,
+                    text=label,
+                    font=("Helvetica", 10),
+                    text_color=theme.COLOR_MUTED
+                ).pack(anchor="w", padx=8, pady=(4, 0))
+
+                ctk.CTkLabel(
+                    box,
+                    text=val_str,
+                    font=("Helvetica", 12, "bold"),
+                    text_color=val_color
+                ).pack(anchor="w", padx=8, pady=(0, 4))
+
+    # ------------------------------------------------------------ Tab: Backups
+    def _build_backups_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+
+        hdr = ctk.CTkFrame(parent, fg_color="transparent")
+        hdr.grid(row=0, column=0, sticky="ew", pady=(5, 10))
+        ctk.CTkLabel(
+            hdr,
+            text="Create atomic SQLite snapshots or restore from a previous backup.",
+            font=theme.FONT_BODY,
+            text_color=theme.COLOR_MUTED
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            hdr,
+            text="💾 Create Backup Now",
+            width=170,
+            fg_color=theme.COLOR_PRIMARY,
+            hover_color=theme.COLOR_PRIMARY_HOVER,
+            command=self._create_backup_action
+        ).pack(side="right")
+
+        self.backups_list_frame = ctk.CTkScrollableFrame(
+            parent,
+            fg_color=theme.COLOR_CARD_BG,
+            border_color=theme.COLOR_CARD_BORDER,
+            border_width=1,
+            corner_radius=12
+        )
+        self.backups_list_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+
+    def _create_backup_action(self):
+        try:
+            p = backup_api.create_backup(self.db_path)
+            messagebox.showinfo("Backup Created", f"Successfully created backup snapshot:\n{p.name}")
+            self._refresh_backups()
+        except Exception as e:
+            messagebox.showerror("Backup Failed", str(e))
+
+    def _refresh_backups(self):
+        for w in self.backups_list_frame.winfo_children():
+            w.destroy()
+
+        backups = backup_api.list_backups(db_path=self.db_path)
+        if not backups:
+            empty_frame = ctk.CTkFrame(self.backups_list_frame, fg_color="transparent")
+            empty_frame.pack(pady=40)
+            ctk.CTkLabel(
+                empty_frame,
+                text="💾 No backups found yet.",
+                font=theme.FONT_BODY_BOLD,
+                text_color=theme.COLOR_MUTED
+            ).pack()
+            ctk.CTkLabel(
+                empty_frame,
+                text="Click 'Create Backup Now' to take a safe, instant snapshot of your database.",
+                font=theme.FONT_SMALL,
+                text_color=theme.COLOR_MUTED
+            ).pack(pady=(4, 0))
+            return
+
+        for b in backups:
+            card = ctk.CTkFrame(self.backups_list_frame, fg_color=("gray95", "gray18"), corner_radius=8)
+            card.pack(fill="x", padx=10, pady=5)
+
+            left = ctk.CTkFrame(card, fg_color="transparent")
+            left.pack(side="left", padx=14, pady=10)
+
+            ctk.CTkLabel(left, text=b["filename"], font=theme.FONT_BODY_BOLD).pack(anchor="w")
+            ctk.CTkLabel(
+                left,
+                text=f"Created: {b['created_at']}  |  Size: {b['size_kb']} KB",
+                font=theme.FONT_SMALL,
+                text_color=theme.COLOR_MUTED
+            ).pack(anchor="w")
+
+            right = ctk.CTkFrame(card, fg_color="transparent")
+            right.pack(side="right", padx=14, pady=10)
+
+            ctk.CTkButton(
+                right, text="Restore ↺", width=90, height=28,
+                fg_color=theme.COLOR_PRIMARY, hover_color=theme.COLOR_PRIMARY_HOVER,
+                command=lambda p=b["path"]: self._restore_backup_action(p)
+            ).pack(side="left", padx=(0, 8))
+
+            ctk.CTkButton(
+                right, text="Delete 🗑️", width=80, height=28,
+                fg_color="transparent", border_width=1, border_color=theme.COLOR_DANGER,
+                text_color=theme.COLOR_DANGER,
+                command=lambda p=b["path"], fn=b["filename"]: self._delete_backup_action(p, fn)
+            ).pack(side="left")
+
+    def _restore_backup_action(self, backup_path):
+        if messagebox.askyesno(
+            "Confirm Database Restore",
+            "Are you sure you want to restore from this snapshot?\nAll current database tables will be rolled back to this backup state."
+        ):
+            try:
+                backup_api.restore_backup(backup_path, self.db_path)
+                messagebox.showinfo("Restore Complete", "Database was restored successfully!")
+                self.refresh()
+            except Exception as e:
+                messagebox.showerror("Restore Failed", str(e))
+
+    def _delete_backup_action(self, backup_path, filename):
+        if messagebox.askyesno("Confirm Delete", f"Delete backup snapshot '{filename}'?"):
+            backup_api.delete_backup(backup_path)
+            self._refresh_backups()
+
+    # ------------------------------------------------------------ Tab: App Settings
     def _build_global_tab(self, parent):
         parent.columnconfigure(0, weight=1)
         parent.columnconfigure(1, weight=1)
@@ -1195,14 +1455,28 @@ class SettingsScreen(ctk.CTkFrame):
         ctk.CTkLabel(model_card, text="Gemini Model", font=theme.FONT_BODY_BOLD).grid(
             row=1, column=0, sticky="w", padx=20, pady=8
         )
+        model_select_frame = ctk.CTkFrame(model_card, fg_color="transparent")
+        model_select_frame.grid(row=1, column=1, sticky="w", padx=20, pady=8)
+
         self._ai_model_var = tk.StringVar(value=DEFAULT_MODEL)
         self._ai_model_menu = ctk.CTkOptionMenu(
-            model_card,
+            model_select_frame,
             variable=self._ai_model_var,
             values=AVAILABLE_MODELS,
-            width=240,
+            width=220,
         )
-        self._ai_model_menu.grid(row=1, column=1, sticky="w", padx=20, pady=8)
+        self._ai_model_menu.pack(side="left", padx=(0, 10))
+
+        ctk.CTkButton(
+            model_select_frame,
+            text="🔄 Discover Live Models",
+            width=170,
+            fg_color="transparent",
+            border_width=1,
+            border_color=theme.COLOR_CARD_BORDER,
+            text_color=("black", "white"),
+            command=self._refresh_live_models,
+        ).pack(side="left")
 
         ctk.CTkButton(
             model_card,
@@ -1240,6 +1514,21 @@ class SettingsScreen(ctk.CTkFrame):
         except Exception as e:
             self._ai_model_status.configure(text=f"Error: {e}", text_color=theme.COLOR_DANGER)
 
+    def _refresh_live_models(self):
+        self._ai_model_status.configure(text="Querying Gemini API for active models...", text_color=theme.COLOR_MUTED)
+        try:
+            models = fetch_available_models(db_path=self.db_path)
+            self._ai_model_menu.configure(values=models)
+            if models and self._ai_model_var.get() not in models:
+                self._ai_model_var.set(models[0])
+            self._ai_model_status.configure(
+                text=f"✅ Discovered {len(models)} active model(s) available for your API key.",
+                text_color=theme.COLOR_SUCCESS
+            )
+        except Exception as e:
+            self._ai_model_status.configure(text=f"Could not fetch models: {e}", text_color=theme.COLOR_DANGER)
+
+
     def _refresh_ai(self):
         """Load current AI settings into the tab fields."""
         try:
@@ -1264,5 +1553,7 @@ class SettingsScreen(ctk.CTkFrame):
         self._refresh_categories()
         self._refresh_ef()
         self._refresh_recurring()
+        self._refresh_archives()
+        self._refresh_backups()
         self._refresh_globals()
         self._refresh_ai()

@@ -14,11 +14,53 @@ from .settings import get_setting, set_setting
 # ── Available models ──────────────────────────────────────────────────────────
 AVAILABLE_MODELS = [
     "gemini-2.5-flash",
-    "gemini-3.5-flash",
-    "gemini-3.7-flash",
     "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
 ]
-DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_MODEL = "gemini-2.5-flash"
+
+
+def fetch_available_models(api_key: str | None = None, db_path=None) -> list[str]:
+    """
+    Dynamically queries Google GenAI API with the user's API key to discover all
+    currently active, supported Gemini chat/generation models.
+    Filters out embedding, video, and audio-only models, prioritizing modern flash & pro models.
+    Falls back to curated AVAILABLE_MODELS if the API call fails or is offline.
+    """
+    key = api_key or load_api_key(db_path)
+    if not key:
+        return AVAILABLE_MODELS
+
+    try:
+        client = genai.Client(api_key=key, http_options={'api_version': 'v1'})
+        pager = client.models.list(config={'query_base': True})
+        discovered = []
+        for m in pager:
+            m_name = getattr(m, 'name', '') or ''
+            clean_id = m_name.split("/")[-1]
+            if not clean_id.startswith("gemini"):
+                continue
+            lower = clean_id.lower()
+            if any(x in lower for x in ["embedding", "imagen", "aqa", "realtime", "tts", "learnlm"]):
+                continue
+            if clean_id not in discovered:
+                discovered.append(clean_id)
+
+        if discovered:
+            def _sort_key(name):
+                # Put flash first, then pro
+                is_flash = 0 if "flash" in name else 1
+                return (is_flash, name)
+
+            discovered.sort(key=_sort_key)
+            return discovered
+    except Exception:
+        pass
+
+    return AVAILABLE_MODELS
+
 
 
 

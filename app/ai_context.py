@@ -10,6 +10,8 @@ from .budget_logic import dashboard_summary
 from .categories import list_categories
 from .transactions import list_transactions
 from .emergency_fund import get_balance as ef_balance
+from .settings import get_setting
+from .savings_goals import goals_summary
 
 
 def build_live_context(db_path=None) -> str:
@@ -18,6 +20,7 @@ def build_live_context(db_path=None) -> str:
     of the user's budget. Injected into every Gemini request as live context.
     """
     month = date.today().isoformat()[:7]
+    currency = get_setting("currency_symbol", db_path) or "₹"
     lines = []
 
     # -- Month summary --
@@ -25,11 +28,12 @@ def build_live_context(db_path=None) -> str:
         summary = dashboard_summary(month, db_path)
         lines.append(f"=== LIVE BUDGET DATA (as of {date.today().isoformat()}) ===")
         lines.append(f"Current month: {month}")
-        lines.append(f"Total income this month:        ${summary['total_income']:,.2f}")
-        lines.append(f"Total spent this month:         ${summary['total_spent']:,.2f}")
-        lines.append(f"Available to spend:             ${summary['available_to_spend']:,.2f}")
-        lines.append(f"Savings balance:                ${summary['savings_balance']:,.2f}")
-        lines.append(f"Emergency fund balance:         ${summary['emergency_fund_balance']:,.2f}")
+        lines.append(f"Currency: {currency}")
+        lines.append(f"Total income this month:        {currency}{summary['total_income']:,.2f}")
+        lines.append(f"Total spent this month:         {currency}{summary['total_spent']:,.2f}")
+        lines.append(f"Available to spend:             {currency}{summary['available_to_spend']:,.2f}")
+        lines.append(f"Savings balance:                {currency}{summary['savings_balance']:,.2f}")
+        lines.append(f"Emergency fund balance:         {currency}{summary['emergency_fund_balance']:,.2f}")
         lines.append(f"Pending approval transactions:  {len(summary.get('pending_approvals', []))}")
     except Exception as e:
         lines.append(f"[Could not load summary: {e}]")
@@ -44,7 +48,7 @@ def build_live_context(db_path=None) -> str:
             for cat in expense_cats:
                 cat_id = cat["id"]
                 cat_data = next(
-                    (c for c in summary.get("categories", []) if c["id"] == cat_id),
+                    (c for c in summary.get("categories", []) if c.get("category_id") == cat_id or c.get("id") == cat_id),
                     None
                 )
                 spent = cat_data["spent"] if cat_data else 0.0
@@ -57,7 +61,7 @@ def build_live_context(db_path=None) -> str:
                 elif spent >= soft:
                     status = "OVER SOFT LIMIT"
                 lines.append(
-                    f"  {cat['name']}: spent ${spent:,.2f} / hard limit ${hard:,.2f} "
+                    f"  {cat['name']}: spent {currency}{spent:,.2f} / hard limit {currency}{hard:,.2f} "
                     f"({pct:.0f}%) — {status}"
                 )
         else:
@@ -68,6 +72,22 @@ def build_live_context(db_path=None) -> str:
             lines.append("  Income categories: " + ", ".join(c["name"] for c in income_cats))
     except Exception as e:
         lines.append(f"[Could not load categories: {e}]")
+
+    # -- Dedicated Savings Goals --
+    lines.append("\n--- DEDICATED SAVINGS GOALS ---")
+    try:
+        g_sum = goals_summary(db_path=db_path)
+        goals = g_sum.get("goals", [])
+        if goals:
+            lines.append(f"  Combined Goals: saved {currency}{g_sum['total_saved']:,.2f} of {currency}{g_sum['total_target']:,.2f} ({g_sum['overall_pct']}%)")
+            for g in goals:
+                st = "COMPLETED" if g["is_completed"] else f"{g['pct']}%"
+                dt_txt = f", due: {g['target_date']}" if g.get("target_date") else ""
+                lines.append(f"  • {g['name']}: {currency}{g['saved_amount']:,.2f} / {currency}{g['target_amount']:,.2f} ({st}{dt_txt})")
+        else:
+            lines.append("  No active savings goals.")
+    except Exception as e:
+        lines.append(f"[Could not load savings goals: {e}]")
 
     # -- Last 30 transactions --
     lines.append("\n--- RECENT TRANSACTIONS (last 30) ---")
@@ -83,7 +103,7 @@ def build_live_context(db_path=None) -> str:
                 desc = t["description"] or "(no description)"
                 lines.append(
                     f"  {t['date']} | {t['type'].upper():7s} | {cat_name:20s} | "
-                    f"{sign}${t['amount']:,.2f} | {desc}"
+                    f"{sign}{currency}{t['amount']:,.2f} | {desc}"
                 )
         else:
             lines.append("  No transactions recorded yet.")
@@ -96,59 +116,41 @@ def build_live_context(db_path=None) -> str:
 
 def build_system_prompt(db_path=None) -> str:
     """
-    Returns the full system prompt: static app knowledge + live DB context.
+    Returns the full system prompt: static app knowledge + live DB context + transaction quick-add instructions.
     """
-    static = """You are BudgetBot, an AI financial assistant built into BudgetApp — a personal budget tracking desktop application for macOS.
+    static = """You are BudgetBot, an AI financial assistant built into BudgetApp — a personal budget tracking desktop application.
 
 YOUR ROLE:
 - Help the user understand their spending, savings, and budget health.
+- Deliver executive-grade financial health audits and actionable recommendations when requested.
 - Answer questions about the app's features and how to use them.
 - Give practical, concise financial insights based on the live data provided.
 - Be friendly, direct, and focused. Never guess at numbers — always use the live data provided.
 
-APP FEATURE KNOWLEDGE:
+SPECIAL CAPABILITY: NATURAL LANGUAGE TRANSACTION RECORDING
+When the user indicates they want to add or log a transaction (e.g. "I bought groceries for 450", "Add salary 50000", "Spent 120 on coffee"),
+provide a friendly acknowledgement, and at the end of your response, ALWAYS append a JSON block formatted exactly like this:
+```json
+{
+  "action": "add_transaction",
+  "amount": <number>,
+  "type": "expense" or "income",
+  "category": "<matching category name from the live category list>",
+  "date": "YYYY-MM-DD",
+  "description": "<clean short description>"
+}
+```
+The desktop app automatically parses this JSON and presents an interactive 1-click button for the user to confirm the transaction into their budget.
 
-1. DASHBOARD
-   - Shows 5 summary cards: Available to Spend, Total Income, Total Spent (row 1); Savings Balance, Emergency Fund (row 2).
-   - "Available to Spend" = General Income + Category Inflows − Total Expenses − Manual EF Deposits for this month.
-   - Shows a spending pace chart (actual vs projected) and a category limits & progress section.
-
-2. ADD TRANSACTION
-   - Transaction types: Expense or Income.
-   - For EXPENSES: must select an expense category (categories with spending limits > 0).
-   - For INCOME: select "General Income" for regular salary/rent, OR select a zero-limit income category (e.g. Gifts, Parents) for supplemental money.
-   - Funding source for expenses: Regular, Savings, or Emergency Fund.
-   - Date, amount, and optional description are required.
-
-3. TRANSACTIONS LIST
-   - Shows all transactions with filters for category, type, and status.
-   - Sortable by date, category, amount, etc.
-   - Can delete individual transactions.
-
-4. SETTINGS
-   - Categories: Create, rename, or delete spending categories. Set soft and hard limits per category.
-     - EXPENSE categories: set limits > 0 (e.g. soft=$800, hard=$1000 for Food).
-     - INCOME categories: set both limits to 0 (e.g. Gifts, Parents, Side Hustle).
-   - Thresholds: Set per-category warning thresholds.
-   - Emergency Fund: Set EF target amount and monthly contribution (fixed $ or %).
-   - Rollover: Trigger manual month-end rollover; leftover money goes to savings and/or EF.
-   - AI Assistant: Set your Gemini API key and preferred model.
-
-5. EMERGENCY FUND (EF)
-   - Separate from Savings. Has its own target amount.
-   - Manual deposits reduce "Available to Spend" for the month.
-   - At month-end rollover, remaining leftover can auto-contribute to EF until the target is hit.
-
-6. MONTH-END ROLLOVER
-   - At month end, leftover = total limits − total spent.
-   - Leftover is split between EF (until target is reached) and Savings.
-   - Can be triggered manually from Settings → Rollover section.
-
-CONVERSATION STYLE:
-- Keep answers short and actionable.
-- When referencing numbers, always cite the live data.
-- If the user asks something outside personal finance or this app, politely redirect.
-
+SPECIAL CAPABILITY: FINANCIAL HEALTH AUDIT
+When the user asks for a financial health audit or report:
+1. Assign an overall Health Grade (A/B/C/D/F).
+2. Detail Budget & Runway Health (Income vs Spent pace, emergency fund coverage in months).
+3. Detail Category Warnings (flagging categories approaching or over limit).
+4. Detail Savings Goals Progress.
+5. Provide Top 3 Actionable Steps to optimize their money this month.
+Format using clean markdown with clear headers, bullet points, and emojis.
 """
     live_ctx = build_live_context(db_path)
     return static + "\n" + live_ctx
+

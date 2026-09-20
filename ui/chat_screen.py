@@ -5,19 +5,24 @@ A full-screen conversational chat interface powered by Gemini.
 Live budget data is injected into each conversation as context.
 """
 
+import json
+import re
+from datetime import date, datetime
 import tkinter as tk
 import customtkinter as ctk
-from datetime import datetime
 
 from ui import theme
 from app.ai_chat import GeminiChat, has_api_key, load_model, AVAILABLE_MODELS
 from app.ai_context import build_system_prompt
+from app import categories as categories_api
+from app import transactions as transactions_api
 
 
 class ChatScreen(ctk.CTkFrame):
-    def __init__(self, parent, db_path, **kwargs):
+    def __init__(self, parent, db_path, on_change=None, **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
         self.db_path = db_path
+        self.on_change = on_change
         self._chat = GeminiChat(db_path=db_path)
         self._thinking = False
 
@@ -43,10 +48,25 @@ class ChatScreen(ctk.CTkFrame):
         )
         self._model_label.grid(row=0, column=1, sticky="w", padx=16)
 
+        btn_box = ctk.CTkFrame(header, fg_color="transparent")
+        btn_box.grid(row=0, column=2, sticky="e")
+
+        self._audit_btn = ctk.CTkButton(
+            btn_box,
+            text="📊 Financial Health Audit",
+            width=180,
+            height=30,
+            fg_color=theme.COLOR_PRIMARY,
+            hover_color=theme.COLOR_PRIMARY_HOVER,
+            font=theme.FONT_SMALL,
+            command=self._trigger_audit,
+        )
+        self._audit_btn.pack(side="left", padx=(0, 8))
+
         self._clear_btn = ctk.CTkButton(
-            header,
+            btn_box,
             text="Clear Chat",
-            width=100,
+            width=90,
             height=30,
             fg_color="transparent",
             border_color=theme.COLOR_MUTED,
@@ -55,7 +75,7 @@ class ChatScreen(ctk.CTkFrame):
             font=theme.FONT_SMALL,
             command=self._clear_chat,
         )
-        self._clear_btn.grid(row=0, column=2, sticky="e")
+        self._clear_btn.pack(side="left")
 
         # Chat bubble area (scrollable)
         self._bubble_frame = ctk.CTkScrollableFrame(
@@ -265,9 +285,32 @@ class ChatScreen(ctk.CTkFrame):
     def _on_error(self, error_msg: str):
         self.after(0, lambda: self._display_error(error_msg))
 
+    def _trigger_audit(self):
+        self._input_var.set("Please generate a comprehensive Financial Health Audit and Action Plan for my finances based on my current budget, spending pace, categories, and savings goals.")
+        self._send()
+
     def _display_response(self, reply: str):
         self._hide_thinking()
-        self._add_bubble("model", reply)
+
+        # Check if reply contains a transaction JSON block
+        action_match = re.search(r'```(?:json)?\s*(\{.*?"action"\s*:\s*"add_transaction".*?\})\s*```', reply, re.DOTALL)
+        clean_reply = reply
+        act_data = None
+        if action_match:
+            try:
+                act_data = json.loads(action_match.group(1))
+                clean_reply = reply[:action_match.start()].strip()
+                post_text = reply[action_match.end():].strip()
+                if post_text:
+                    clean_reply += "\n\n" + post_text
+            except Exception:
+                pass
+
+        self._add_bubble("model", clean_reply)
+
+        if act_data:
+            self._render_transaction_action_card(act_data)
+
         self._input_entry.configure(state="normal")
         self._send_btn.configure(state="normal")
         self._thinking = False
@@ -275,6 +318,61 @@ class ChatScreen(ctk.CTkFrame):
         self._status_label.configure(
             text=f"Model: {model}  •  Turns: {self._chat.turn_count}"
         )
+
+    def _render_transaction_action_card(self, act: dict):
+        card = ctk.CTkFrame(self._bubble_frame, fg_color=("gray90", "gray20"), corner_radius=10)
+        card.pack(fill="x", padx=16, pady=(4, 10))
+
+        t_type = str(act.get("type", "expense")).capitalize()
+        try:
+            amt = float(act.get("amount", 0.0))
+        except (ValueError, TypeError):
+            amt = 0.0
+        cat_name = act.get("category", "General")
+        desc = act.get("description", "")
+        txn_d = act.get("date", date.today().isoformat())
+
+        info_txt = f"💡 Action Detected: {t_type} ₹{amt:,.2f} • {cat_name} • '{desc}' • {txn_d}"
+        ctk.CTkLabel(card, text=info_txt, font=theme.FONT_BODY_BOLD).pack(side="left", padx=14, pady=10)
+
+        confirm_btn = ctk.CTkButton(
+            card, text="➕ Confirm & Add", width=140, height=28,
+            fg_color=theme.COLOR_SUCCESS, hover_color="#388E3C"
+        )
+        confirm_btn.configure(command=lambda a=act, b=confirm_btn: self._confirm_ai_transaction(a, b))
+        confirm_btn.pack(side="right", padx=12, pady=10)
+
+        self.after(50, self._scroll_to_bottom)
+
+    def _confirm_ai_transaction(self, act: dict, btn: ctk.CTkButton):
+        try:
+            cats = categories_api.list_categories(self.db_path)
+            cat_map = {c["name"].lower(): c["id"] for c in cats}
+            requested_cat = str(act.get("category") or "").strip().lower()
+
+            cat_id = None
+            if act.get("type") == "expense":
+                cat_id = cat_map.get(requested_cat)
+                if not cat_id and cats:
+                    cat_id = cats[0]["id"]
+            else:
+                cat_id = cat_map.get(requested_cat)
+
+            transactions_api.add_transaction(
+                amount=float(act.get("amount", 0.0)),
+                type=act.get("type", "expense"),
+                category_id=cat_id,
+                description=act.get("description", "AI logged transaction"),
+                txn_date=act.get("date") or date.today().isoformat(),
+                funding_source="regular",
+                db_path=self.db_path
+            )
+
+            btn.configure(text="✓ Added to Budget!", state="disabled", fg_color="#10B981")
+            if self.on_change:
+                self.on_change()
+        except Exception as e:
+            btn.configure(text=f"Failed: {e}", state="disabled", fg_color=theme.COLOR_DANGER)
 
     def _display_error(self, error_msg: str):
         self._hide_thinking()
