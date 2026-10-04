@@ -8,10 +8,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,7 +26,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import com.budgetapp.domain.ai.GeminiAssistant
 import com.budgetapp.data.local.entity.CategoryEntity
 import com.budgetapp.data.local.entity.EmergencyFundEntity
 import com.budgetapp.data.local.entity.EmergencyFundLogEntity
@@ -54,11 +64,14 @@ fun SettingsScreen(
     onManualRollover: () -> Unit,
     archivesList: List<com.budgetapp.domain.model.MonthArchiveRecord> = emptyList(),
     onViewArchiveInDashboard: (String) -> Unit = {},
+    geminiApiKey: String = "",
+    geminiModel: String = "gemini-1.5-flash",
+    onSaveAiConfig: (apiKey: String, model: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabTitles = listOf("General", "Categories", "Emergency Fund", "Recurring", "Archives", "Backups")
+    val tabTitles = listOf("General", "Categories", "Emergency Fund", "Recurring", "Archives", "AI Assistant", "Backups")
 
     var showAddCategoryDialog by remember { mutableStateOf(false) }
     var categoryToEdit by remember { mutableStateOf<CategoryEntity?>(null) }
@@ -134,7 +147,12 @@ fun SettingsScreen(
                     currencySymbol = currencySymbol,
                     onViewInDashboard = onViewArchiveInDashboard
                 )
-                5 -> BackupsTab(
+                5 -> AiAssistantSettingsTab(
+                    initialApiKey = geminiApiKey,
+                    initialModel = geminiModel,
+                    onSave = onSaveAiConfig
+                )
+                6 -> BackupsTab(
                     backups = backupList,
                     onCreateBackup = {
                         try {
@@ -772,3 +790,233 @@ fun EfTransferDialog(
         }
     )
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AiAssistantSettingsTab(
+    initialApiKey: String,
+    initialModel: String,
+    onSave: (apiKey: String, model: String) -> Unit
+) {
+    var apiKeyText by remember(initialApiKey) { mutableStateOf(initialApiKey) }
+    var selectedModel by remember(initialModel) { mutableStateOf(initialModel.ifBlank { GeminiAssistant.DEFAULT_MODEL }) }
+    var keyVisible by remember { mutableStateOf(false) }
+    var isDiscoveringModels by remember { mutableStateOf(false) }
+    var availableModels by remember { mutableStateOf(GeminiAssistant.DEFAULT_MODELS) }
+    var modelDropdownExpanded by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    var isSuccessStatus by remember { mutableStateOf(true) }
+
+    val coroutineScope = rememberCoroutineScope()
+
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        item {
+            Text("AI Assistant Configuration", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        }
+
+        // API Key Card
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Default.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Text("Google Gemini API Key", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    }
+
+                    Text(
+                        "Your API key enables the AI Financial Assistant to analyze budgets and answer questions. Stored locally and securely on your device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Slate400
+                    )
+
+                    OutlinedTextField(
+                        value = apiKeyText,
+                        onValueChange = { apiKeyText = it },
+                        placeholder = { Text("AIzaSy...") },
+                        visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { keyVisible = !keyVisible }) {
+                                Icon(
+                                    imageVector = if (keyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (keyVisible) "Hide key" else "Show key"
+                                )
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    if (apiKeyText.isNotBlank()) {
+                        Surface(
+                            color = GreenSuccess.copy(alpha = 0.12f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(Icons.Default.Check, contentDescription = null, tint = GreenSuccess, modifier = Modifier.size(16.dp))
+                                Text(
+                                    "API key is configured and stored locally.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = GreenSuccess,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Model Selection & Discovery Card
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Text("Model Selection", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    }
+
+                    Text(
+                        "Choose which Gemini model powers your assistant. Auto-detect queries Google API to reveal all live models accessible to your API key.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Slate400
+                    )
+
+                    // Model Dropdown
+                    ExposedDropdownMenuBox(
+                        expanded = modelDropdownExpanded,
+                        onExpandedChange = { modelDropdownExpanded = !modelDropdownExpanded }
+                    ) {
+                        OutlinedTextField(
+                            value = selectedModel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Active Model") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelDropdownExpanded) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        ExposedDropdownMenu(
+                            expanded = modelDropdownExpanded,
+                            onDismissRequest = { modelDropdownExpanded = false }
+                        ) {
+                            availableModels.forEach { m ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = m,
+                                            fontWeight = if (m == selectedModel) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    },
+                                    onClick = {
+                                        selectedModel = m
+                                        modelDropdownExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // Auto-Detect Live Models Button
+                    OutlinedButton(
+                        onClick = {
+                            if (apiKeyText.isBlank()) {
+                                statusMessage = "Please enter an API key above before detecting models."
+                                isSuccessStatus = false
+                                return@OutlinedButton
+                            }
+                            isDiscoveringModels = true
+                            statusMessage = "Querying Google Gemini API for active models..."
+                            isSuccessStatus = true
+
+                            coroutineScope.launch {
+                                val discovered = GeminiAssistant.fetchAvailableModels(apiKeyText.trim())
+                                isDiscoveringModels = false
+                                if (discovered.isNotEmpty()) {
+                                    availableModels = discovered
+                                    if (!discovered.contains(selectedModel)) {
+                                        selectedModel = discovered.first()
+                                    }
+                                    statusMessage = "✅ Discovered ${discovered.size} live model(s) available for your API key."
+                                    isSuccessStatus = true
+                                } else {
+                                    statusMessage = "Could not discover models. Kept default model list."
+                                    isSuccessStatus = false
+                                }
+                            }
+                        },
+                        enabled = !isDiscoveringModels,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (isDiscoveringModels) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Querying Gemini API...")
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Auto-Detect Available Models")
+                        }
+                    }
+
+                    // Status Message
+                    statusMessage?.let { msg ->
+                        Text(
+                            text = msg,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isSuccessStatus) GreenSuccess else RedDanger,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
+
+        // Save AI Configuration Button
+        item {
+            Button(
+                onClick = {
+                    onSave(apiKeyText.trim(), selectedModel)
+                    statusMessage = "✅ AI configuration saved successfully!"
+                    isSuccessStatus = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Save AI Settings")
+            }
+        }
+    }
+}
+

@@ -46,6 +46,7 @@ BudgetApp for Android is the native mobile implementation of BudgetApp, built wi
 - **Emergency Fund Tab**: Balance tracking, quick deposit/withdrawal dialogs, and comprehensive activity history logs.
 - **Recurring Tab**: Manage recurring rule schedules (frequency, next due date, category, funding source).
 - **Archives Tab**: Ledger of all closed past months displaying income, expense, savings rollover, and emergency fund delta pills, with a direct **View in Dashboard ↗** shortcut.
+- **AI Assistant Tab**: Configure Google Gemini API key (with show/hide visibility toggle and local storage status), active model selection dropdown, and **Auto-Detect Available Models** live query engine.
 - **Backups Tab**: Snapshot creation and restoration of SQLite databases directly from device storage.
 
 ---

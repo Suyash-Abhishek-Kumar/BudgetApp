@@ -23,7 +23,7 @@ import kotlinx.coroutines.launch
         SavingsGoalEntity::class,
         SavingsGoalLogEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -92,6 +92,7 @@ abstract class AppDatabase : RoomDatabase() {
                 db.settingsDao().setSetting(SettingEntity(key = "ef_target_amount", value = "5000.0"))
                 db.settingsDao().setSetting(SettingEntity(key = "ef_monthly_contribution_type", value = "percent"))
                 db.settingsDao().setSetting(SettingEntity(key = "ef_monthly_contribution", value = "20.0"))
+                db.settingsDao().setSetting(SettingEntity(key = "gemini_model", value = "gemini-1.5-flash"))
             }
         }
     }

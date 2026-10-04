@@ -467,6 +467,17 @@ class MainActivity : ComponentActivity() {
                                 onViewArchiveInDashboard = { archiveMonth ->
                                     activeMonth = archiveMonth
                                     selectedTab = 0
+                                },
+                                geminiApiKey = geminiApiKey,
+                                geminiModel = geminiModel,
+                                onSaveAiConfig = { newKey, newModel ->
+                                    geminiApiKey = newKey
+                                    geminiModel = newModel
+                                    coroutineScope.launch {
+                                        repo.setSetting("gemini_api_key", newKey)
+                                        repo.setSetting("gemini_model", newModel)
+                                        Toast.makeText(context, "AI settings saved successfully!", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             )
                         }

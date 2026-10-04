@@ -23,8 +23,7 @@ data class SavingsGoalEntity(
 
 @Entity(tableName = "settings")
 data class SettingEntity(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,
+    @PrimaryKey
     val key: String,
     val value: String
 )

@@ -6,18 +6,26 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddCard
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.budgetapp.data.local.entity.TransactionEntity
 import com.budgetapp.ui.theme.GreenSuccess
@@ -217,14 +225,217 @@ fun ChatBubble(message: ChatMessage) {
             colors = CardDefaults.cardColors(
                 containerColor = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
             ),
-            modifier = Modifier.widthIn(max = 320.dp)
+            modifier = Modifier.widthIn(max = 340.dp)
         ) {
-            Text(
-                text = message.text,
-                modifier = Modifier.padding(12.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Box(modifier = Modifier.padding(12.dp)) {
+                if (isUser) {
+                    Text(
+                        text = message.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                } else {
+                    MarkdownMessageContent(
+                        content = message.text,
+                        textColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Parses and renders Markdown with support for:
+ * - Bold (**text**) and Italics (*text*)
+ * - Inline code (`code`)
+ * - Bullet list items (•, -, *)
+ * - Markdown tables (| Col 1 | Col 2 |) with responsive horizontal scrolling
+ */
+@Composable
+fun MarkdownMessageContent(
+    content: String,
+    textColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val lines = remember(content) { content.lines() }
+
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        var inTable = false
+        val currentTableRows = mutableListOf<List<String>>()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
+            val trimmed = line.trim()
+
+            // Check for Markdown table line (contains | and starts/ends or splits with |)
+            val isTableRow = trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.count { it == '|' } >= 2
+
+            if (isTableRow) {
+                // Ignore markdown separator row (|---|---|)
+                val isSeparator = trimmed.replace("|", "").replace("-", "").replace(":", "").trim().isEmpty()
+                if (!isSeparator) {
+                    val cells = trimmed.split("|")
+                        .drop(1)
+                        .dropLast(1)
+                        .map { it.trim() }
+                    currentTableRows.add(cells)
+                }
+                inTable = true
+            } else {
+                if (inTable) {
+                    val rowsToRender = currentTableRows.toList()
+                    currentTableRows.clear()
+                    inTable = false
+                    MarkdownTableView(rows = rowsToRender, textColor = textColor)
+                }
+
+                if (trimmed.isNotEmpty()) {
+                    val isBullet = trimmed.startsWith("•") || trimmed.startsWith("- ") || trimmed.startsWith("* ")
+                    val displayText = if (isBullet) {
+                        val clean = when {
+                            trimmed.startsWith("- ") -> trimmed.removePrefix("- ")
+                            trimmed.startsWith("* ") -> trimmed.removePrefix("* ")
+                            trimmed.startsWith("• ") -> trimmed.removePrefix("• ")
+                            trimmed.startsWith("•") -> trimmed.removePrefix("•")
+                            else -> trimmed
+                        }
+                        "• $clean"
+                    } else {
+                        trimmed
+                    }
+
+                    val annotatedText = parseMarkdownInText(displayText, textColor)
+                    Text(
+                        text = annotatedText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = textColor
+                    )
+                }
+            }
+            i++
+        }
+
+        // Flush any trailing table
+        if (currentTableRows.isNotEmpty()) {
+            MarkdownTableView(rows = currentTableRows, textColor = textColor)
+        }
+    }
+}
+
+/**
+ * Parses inline markdown: **bold**, *italic*, `code` into AnnotatedString.
+ */
+@Composable
+fun parseMarkdownInText(text: String, baseColor: Color): androidx.compose.ui.text.AnnotatedString {
+    return remember(text, baseColor) {
+        buildAnnotatedString {
+            // Regex to find **bold**, *italic*, or `code`
+            val pattern = Regex("""(\*\*.*?\*\*|\*.*?\*|`.*?`)""")
+            var currentIndex = 0
+
+            val matches = pattern.findAll(text)
+            for (match in matches) {
+                // Append text before match
+                if (match.range.first > currentIndex) {
+                    append(text.substring(currentIndex, match.range.first))
+                }
+
+                val token = match.value
+                when {
+                    token.startsWith("**") && token.endsWith("**") && token.length >= 4 -> {
+                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                            append(token.substring(2, token.length - 2))
+                        }
+                    }
+                    token.startsWith("`") && token.endsWith("`") && token.length >= 2 -> {
+                        withStyle(
+                            SpanStyle(
+                                fontFamily = FontFamily.Monospace,
+                                background = baseColor.copy(alpha = 0.12f),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        ) {
+                            append(token.substring(1, token.length - 1))
+                        }
+                    }
+                    token.startsWith("*") && token.endsWith("*") && token.length >= 2 -> {
+                        withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                            append(token.substring(1, token.length - 1))
+                        }
+                    }
+                    else -> append(token)
+                }
+
+                currentIndex = match.range.last + 1
+            }
+
+            if (currentIndex < text.length) {
+                append(text.substring(currentIndex))
+            }
+        }
+    }
+}
+
+/**
+ * Beautifully styled Markdown Table with horizontal scrolling and alternating row tint.
+ */
+@Composable
+fun MarkdownTableView(
+    rows: List<List<String>>,
+    textColor: Color,
+    modifier: Modifier = Modifier
+) {
+    if (rows.isEmpty()) return
+    val scrollState = rememberScrollState()
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = CardDefaults.outlinedCardBorder()
+    ) {
+        Column(
+            modifier = Modifier
+                .horizontalScroll(scrollState)
+                .padding(6.dp)
+        ) {
+            rows.forEachIndexed { rowIndex, cells ->
+                val isHeader = rowIndex == 0
+                Row(
+                    modifier = Modifier
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    cells.forEachIndexed { colIndex, cellText ->
+                        Box(
+                            modifier = Modifier
+                                .widthIn(min = 80.dp, max = 160.dp)
+                                .padding(horizontal = 8.dp)
+                        ) {
+                            val annotated = parseMarkdownInText(cellText, textColor)
+                            Text(
+                                text = annotated,
+                                style = if (isHeader) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall,
+                                fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isHeader) MaterialTheme.colorScheme.primary else textColor
+                            )
+                        }
+                    }
+                }
+                if (isHeader) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        thickness = 1.dp,
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
+                }
+            }
         }
     }
 }
@@ -297,10 +508,12 @@ fun ApiKeyDialog(
     onSave: (key: String, model: String) -> Unit
 ) {
     var apiKeyText by remember { mutableStateOf(currentApiKey) }
-    var selectedModel by remember { mutableStateOf(currentModel.ifBlank { "gemini-1.5-flash" }) }
+    var selectedModel by remember { mutableStateOf(currentModel.ifBlank { com.budgetapp.domain.ai.GeminiAssistant.DEFAULT_MODEL }) }
     var modelDropdownExpanded by remember { mutableStateOf(false) }
-
-    val models = listOf("gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash")
+    var availableModels by remember { mutableStateOf(com.budgetapp.domain.ai.GeminiAssistant.DEFAULT_MODELS) }
+    var isDetectingModels by remember { mutableStateOf(false) }
+    var detectStatus by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -335,9 +548,9 @@ fun ApiKeyDialog(
                         expanded = modelDropdownExpanded,
                         onDismissRequest = { modelDropdownExpanded = false }
                     ) {
-                        models.forEach { m ->
+                        availableModels.forEach { m ->
                             DropdownMenuItem(
-                                text = { Text(m) },
+                                text = { Text(m, fontWeight = if (m == selectedModel) FontWeight.Bold else FontWeight.Normal) },
                                 onClick = {
                                     selectedModel = m
                                     modelDropdownExpanded = false
@@ -345,6 +558,46 @@ fun ApiKeyDialog(
                             )
                         }
                     }
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        if (apiKeyText.isBlank()) {
+                            detectStatus = "Please enter an API key first."
+                            return@OutlinedButton
+                        }
+                        isDetectingModels = true
+                        detectStatus = "Querying Gemini API..."
+                        coroutineScope.launch {
+                            val discovered = com.budgetapp.domain.ai.GeminiAssistant.fetchAvailableModels(apiKeyText.trim())
+                            isDetectingModels = false
+                            if (discovered.isNotEmpty()) {
+                                availableModels = discovered
+                                if (!discovered.contains(selectedModel)) {
+                                    selectedModel = discovered.first()
+                                }
+                                detectStatus = "✅ Found ${discovered.size} model(s)."
+                            } else {
+                                detectStatus = "Could not discover models."
+                            }
+                        }
+                    },
+                    enabled = !isDetectingModels,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isDetectingModels) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Detecting...")
+                    } else {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Auto-Detect Models")
+                    }
+                }
+
+                detectStatus?.let { msg ->
+                    Text(msg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
         },

@@ -72,7 +72,14 @@ object AiContextSynthesizer {
             sb.append("• ${tx.date} | ${tx.description ?: catName} | $catName | $sign$currencySymbol${String.format("%.2f", tx.amount)}\n")
         }
 
-        sb.append("\nINSTRUCTIONS: You are BudgetApp's personal financial copilot. Analyze the live budget context above to give concise, accurate, actionable advice. Never fabricate numbers outside the provided context.")
+        sb.append("\nINSTRUCTIONS:\n")
+        sb.append("You are BudgetApp's personal financial copilot. Analyze the live budget context above to give concise, accurate, actionable advice.\n")
+        sb.append("Formatting guidelines:\n")
+        sb.append("- Use bold (**term**) for metrics, currency amounts, and category names.\n")
+        sb.append("- Use bullet points (• or -) for listings and breakdowns.\n")
+        sb.append("- When tabular data is helpful, you can use markdown tables (| Col 1 | Col 2 |) or concise bulleted key-value pairs.\n")
+        sb.append("- Keep responses clear and easy to read on mobile screens.\n")
+        sb.append("- Never fabricate numbers outside the provided context.")
         return sb.toString()
     }
 }
