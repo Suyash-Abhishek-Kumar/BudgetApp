@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer Glow Ring -->
+    <path
+        android:fillColor="#3B82F6"
+        android:fillAlpha="0.25"
+        android:pathData="M54,54m-32,0a32,32 0,1,1 64,0a32,32 0,1,1 -64,0" />
+
+    <!-- Wallet / Vault Body Base -->
+    <path
+        android:fillColor="#2563EB"
+        android:pathData="M34,40 C34,36.686 36.686,34 40,34 L68,34 C71.314,34 74,36.686 74,40 L74,68 C74,71.314 71.314,74 68,74 L40,74 C36.686,74 34,71.314 34,68 Z" />
+
+    <!-- Wallet Top Flap / Highlight Accent -->
+    <path
+        android:fillColor="#60A5FA"
+        android:pathData="M34,40 C34,36.686 36.686,34 40,34 L68,34 C71.314,34 74,36.686 74,40 L74,45 L34,45 Z" />
+
+    <!-- Wallet Clasp / Card Pocket -->
+    <path
+        android:fillColor="#1D4ED8"
+        android:pathData="M58,49 L74,49 C75.105,49 76,49.895 76,51 L76,63 C76,64.105 75.105,65 74,65 L58,65 C56.895,65 56,64.105 56,63 L56,51 C56,49.895 56.895,49 58,49 Z" />
+
+    <!-- Clasp Gold Coin / Token Accent -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M64,57m-3,0a3,3 0,1,1 6,0a3,3 0,1,1 -6,0" />
+
+    <!-- Growth / Surge Arrow Symbol -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M43,62 L43,53 L47,57 L52,50 L52,54 L54,54 L54,47 L47,47 L47,49 L50.6,49 L46.6,54.6 L43.2,51.2 Z" />
+</vector>
